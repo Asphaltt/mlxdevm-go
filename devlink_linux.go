@@ -64,6 +64,10 @@ type DevlinkDevParam struct {
 	Name      string
 	Attribute nl.Attribute
 	CMode     uint8
+	Generic   bool
+
+	AttrValueValid bool
+	CmodeValid     bool
 }
 
 // DevlinkPort represents port and its attributes
@@ -93,9 +97,7 @@ type DevlinkPortAddAttrs struct {
 	ControllerValid bool
 }
 
-var (
-	native = nl.NativeEndian()
-)
+var native = nl.NativeEndian()
 
 // DevlinkResource represents a device resource
 type DevlinkResource struct {
@@ -287,7 +289,7 @@ func eswitchStringToMode(modeName string) (uint16, error) {
 }
 
 func parseEswitchMode(mode uint16) string {
-	var eswitchMode = map[uint16]string{
+	eswitchMode := map[uint16]string{
 		DEVLINK_ESWITCH_MODE_LEGACY:    "legacy",
 		DEVLINK_ESWITCH_MODE_SWITCHDEV: "switchdev",
 	}
@@ -299,7 +301,7 @@ func parseEswitchMode(mode uint16) string {
 }
 
 func parseEswitchInlineMode(inlinemode uint8) string {
-	var eswitchInlineMode = map[uint8]string{
+	eswitchInlineMode := map[uint8]string{
 		DEVLINK_ESWITCH_INLINE_MODE_NONE:      "none",
 		DEVLINK_ESWITCH_INLINE_MODE_LINK:      "link",
 		DEVLINK_ESWITCH_INLINE_MODE_NETWORK:   "network",
@@ -313,7 +315,7 @@ func parseEswitchInlineMode(inlinemode uint8) string {
 }
 
 func parseEswitchEncapMode(encapmode uint8) string {
-	var eswitchEncapMode = map[uint8]string{
+	eswitchEncapMode := map[uint8]string{
 		DEVLINK_ESWITCH_ENCAP_MODE_NONE:  "disable",
 		DEVLINK_ESWITCH_ENCAP_MODE_BASIC: "enable",
 	}
@@ -638,7 +640,6 @@ func parseDevlinkPortMsg(Socket string, msgs [][]byte) (*DevlinkPort, error) {
 // DevlinkGetPortByIndex provides a pointer to devlink device and nil error,
 // otherwise returns an error code.
 func (h *Handle) DevlinkGetPortByIndex(Socket string, Bus string, Device string, PortIndex uint32) (*DevlinkPort, error) {
-
 	_, req, err := h.createCmdReq(Socket, DEVLINK_CMD_PORT_GET, Bus, Device)
 	if err != nil {
 		return nil, err
@@ -803,15 +804,29 @@ func parseDevParam(data []byte) *DevlinkDevParam {
 
 		for a := range nl.ParseAttributes(data) {
 			switch a.Type {
-			case DEVLINK_ATTR_PARAM_NAME:
+			case DEVLINK_ATTR_PARAM: // 0x50
+				stack = append(stack, a.Value)
+			case DEVLINK_ATTR_PARAM_NAME: // 0x51
 				param.Name = string(a.Value[:len(a.Value)-1])
-			case DEVLINK_ATTR_PARAM_TYPE:
+			case DEVLINK_ATTR_PARAM_GENERIC: // 0x52
+				param.Generic = true
+			case DEVLINK_ATTR_PARAM_TYPE: // 0x53
 				param.Attribute.Type = uint16(a.Value[0])
-			case DEVLINK_ATTR_PARAM_VALUE_CMODE:
+			case DEVLINK_ATTR_PARAM_VALUES_LIST: // 0x54
+				stack = append(stack, a.Value)
+			case DEVLINK_ATTR_PARAM_VALUE: // 0x55
+				stack = append(stack, a.Value)
+			case DEVLINK_ATTR_PARAM_VALUE_DATA: // 0x56
+				param.AttrValueValid = true
+				if param.Attribute.Type == MNL_TYPE_FLAG {
+					param.Attribute.Value = []byte{uint8(1)}
+				} else {
+					param.Attribute.Value = a.Value
+				}
+			case DEVLINK_ATTR_PARAM_VALUE_CMODE: // 0x57
+				param.CmodeValid = true
 				param.CMode = a.Value[0]
-			case DEVLINK_ATTR_PARAM_VALUE_DATA:
-				param.Attribute.Value = a.Value
-			case DEVLINK_ATTR_PARAM_VALUE | unix.NLA_F_NESTED:
+			case DEVLINK_ATTR_PARAM_VALUE | unix.NLA_F_NESTED: // 0x55 | 0x8000
 				if param.Attribute.Type == MNL_TYPE_FLAG {
 					value := 0
 					if bytes.Contains(a.Value, []byte{4, 0, DEVLINK_ATTR_PARAM_VALUE_DATA, 0}) {
@@ -939,7 +954,6 @@ func (h *Handle) DevlinkDevParamSet(Socket string, Bus string, Device string, Pa
 		return err
 	}
 
-	fmt.Println(err)
 	return err
 }
 
